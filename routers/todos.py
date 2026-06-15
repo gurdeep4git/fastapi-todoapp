@@ -1,4 +1,6 @@
 
+from typing import Optional
+
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
 from fastapi import Depends, HTTPException, HTTPException, Path, status, APIRouter
@@ -24,6 +26,14 @@ class TodoCreate(BaseModel):
     priority: int = Field(gt=0, lt=6)
     complete: bool = Field(default=False)    
 
+
+class TodoUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=3)
+    description: Optional[str] = Field(default=None, min_length=3, max_length=255)
+    priority: Optional[int] = Field(default=None, gt=0, lt=6)
+    complete: Optional[bool] = Field(default=None)
+
+
 @router.get('', status_code=status.HTTP_200_OK)
 async def read_todos(user: user_dependency, db:Annotated[Session, Depends(get_db)]):
     if not user:
@@ -36,6 +46,7 @@ async def read_todos(user: user_dependency, db:Annotated[Session, Depends(get_db
 async def read_todo(user:user_dependency, db:Annotated[Session, Depends(get_db)], todo_id: int = Path(gt=0)):
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    
     todo = db.query(Todos).filter(Todos.id == todo_id).filter(Todos.owner_id == user["user_id"]).first()
     if not todo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Todo not found")
@@ -59,25 +70,31 @@ async def create_todo(user: user_dependency, db:Annotated[Session, Depends(get_d
     return new_todo
 
 @router.put("/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def update_todo(user:user_dependency, db:Annotated[Session, Depends(get_db)], todo: TodoCreate, todo_id: int = Path(gt=0)):
+async def update_todo(user:user_dependency, db:Annotated[Session, Depends(get_db)], todo: TodoUpdate, todo_id: int = Path(gt=0)):
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
     
     existing_todo = db.query(Todos).filter(Todos.id == todo_id).filter(Todos.owner_id == user["user_id"]).first()
+    
     if not existing_todo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Todo not found")
     
-    # Update the fields of the existing todo
-    for key, value in todo.model_dump().items():
-        setattr(existing_todo, key, value)
+    # Only update fields provided by the client (partial update)
+    update_data = todo.model_dump(exclude_unset=True)
+    if update_data:
+        for key, value in update_data.items():
+            setattr(existing_todo, key, value)
     
     db.commit()
     db.refresh(existing_todo)
 
 
 @router.delete("/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_todo(db:Annotated[Session, Depends(get_db)], todo_id: int = Path(gt=0)):
-    todo_to_delete = db.query(Todos).filter(Todos.id == todo_id).first()
+async def delete_todo(user: user_dependency, db:Annotated[Session, Depends(get_db)], todo_id: int = Path(gt=0)):
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    
+    todo_to_delete = db.query(Todos).filter(Todos.id == todo_id).filter(Todos.owner_id == user["user_id"]).first()
     if not todo_to_delete:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Todo not found")
     
